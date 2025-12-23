@@ -202,10 +202,24 @@ inline void Astarpath::AstarGetSucc(MappingNodePtr currentPtr,
 double Astarpath::getHeu(MappingNodePtr node1, MappingNodePtr node2) {
   
   // 使用数字距离和一种类型的tie_breaker
-  double heu;
-  double tie_breaker;
+  Vector3i idx1 = node1->index;
+  Vector3i idx2 = node2->index;
   
-  return heu;
+  double dx = double(idx2(0) - idx1(0));
+  double dy = double(idx2(1) - idx1(1));
+  double dz = double(idx2(2) - idx1(2));
+  
+  //计算欧氏距离
+  double heu = sqrt(dx * dx + dy * dy + dz * dz);
+  
+  //增加Z轴变化惩罚
+  double z_penalty = abs(dz) * 0.5;  //Z轴变化额外增加50%惩罚
+  heu += z_penalty;
+
+  //使用tie_breaker打破平局
+  double tie_breaker = 1.0 + 1.0e-6 * node1->index.norm();
+  
+  return heu * tie_breaker;
 }
 
 
@@ -262,10 +276,22 @@ bool Astarpath::AstarSearch(Vector3d start_pt, Vector3d end_pt) {
   while (!Openset.empty()) {
     //1.弹出g+h最小的节点
     //????
+    currentPtr = Openset.begin()->second;
+    Openset.erase(Openset.begin());
+    currentPtr->id = -1; //标记为在closed set中
     //2.判断是否是终点
     //????
+    if (currentPtr->index == goalIdx) {
+      terminatePtr = currentPtr;
+      ros::Time time_2 = ros::Time::now();
+      if ((time_2 - time_1).toSec() > 0.1)
+        ROS_WARN("Time consume in Astar path finding is %f",
+                (time_2 - time_1).toSec());
+    return true;
+  }
     //3.拓展当前节点
     //????
+    AstarGetSucc(currentPtr, neighborPtrSets, edgeCostSets);
     for(unsigned int i=0;i<neighborPtrSets.size();i++)
     {
       
@@ -275,18 +301,34 @@ bool Astarpath::AstarSearch(Vector3d start_pt, Vector3d end_pt) {
       }
       tentative_g_score=currentPtr->g_score+edgeCostSets[i];
       neighborPtr=neighborPtrSets[i];
+      int dz = neighborPtr->index(2) - currentPtr->index(2);
+      if (dz < 0) {  //如果邻居节点的Z坐标比当前节点低
+        tentative_g_score += 5.0;  //增加惩罚代价让算法避免向下
+      }
       if(isOccupied(neighborPtr->index))
       continue;
       if(neighborPtr->id==0)
       {
         //4.填写信息，完成更新
         //???
+        neighborPtr->Father = currentPtr;
+        neighborPtr->g_score = tentative_g_score;
+        neighborPtr->f_score = tentative_g_score + getHeu(neighborPtr, endPtr);
+        neighborPtr->id = 1; // 标记为在open set中
+        Openset.insert(make_pair(neighborPtr->f_score, neighborPtr));
         continue;
       }
       else if(neighborPtr->id==1)
       {
         //???
-      continue;
+        if (neighborPtr->g_score > tentative_g_score) {
+          neighborPtr->g_score = tentative_g_score;
+          neighborPtr->Father = currentPtr;
+          neighborPtr->f_score = tentative_g_score + getHeu(neighborPtr, endPtr);
+          //直接插入新条目，旧的会在遍历时被跳过
+          Openset.insert(make_pair(neighborPtr->f_score, neighborPtr));
+        }
+        continue;
       }
     }
   }
@@ -315,6 +357,11 @@ terminatePtr=terminatePtr->Father;
    * **/
 
   // ???
+  //反转并提取路径
+  reverse(front_path.begin(), front_path.end());
+  for (auto node_ptr : front_path) {
+    path.push_back(node_ptr->coord);
+  }
 
   return path;
 }
